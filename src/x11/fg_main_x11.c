@@ -579,6 +579,173 @@ static void fghPrintEvent( XEvent *event )
 }
 #endif
 
+void fgHandleKeyboardEvents( XEvent* event ) {
+    FGCBKeyboardUC keyboard_cb;
+    FGCBSpecialUC special_cb;
+    FGCBUserData keyboard_ud;
+    FGCBUserData special_ud;
+
+    SFG_Window* window = fgWindowByHandle( event->xkey.window );
+    if( window == NULL ) return;
+    window->State.MouseX = event->xkey.x;
+    window->State.MouseY = event->xkey.y;
+
+    /* Detect auto repeated keys, if configured globally or per-window */
+
+    if ( fgState.KeyRepeat==GLUT_KEY_REPEAT_OFF || window->State.IgnoreKeyRepeat==GL_TRUE )
+    {
+        if (event->type==KeyRelease)
+        {
+            /*
+             * Look at X11 keystate to detect repeat mode.
+             * While X11 says the key is actually held down, we'll ignore KeyRelease/KeyPress pairs.
+             */
+
+            char keys[32];
+            XQueryKeymap( fgDisplay.pDisplay.Display, keys ); /* Look at X11 keystate to detect repeat mode */
+
+            if ( event->xkey.keycode<256 )            /* XQueryKeymap is limited to 256 keycodes    */
+            {
+                if ( keys[event->xkey.keycode>>3] & (1<<(event->xkey.keycode%8)) )
+                    window->State.pWState.KeyRepeating = GL_TRUE;
+                else
+                    window->State.pWState.KeyRepeating = GL_FALSE;
+            }
+        }
+    }
+    else
+        window->State.pWState.KeyRepeating = GL_FALSE;
+
+    /* Cease processing this event if it is auto repeated */
+
+    if (window->State.pWState.KeyRepeating)
+    {
+        if (event->type == KeyPress) window->State.pWState.KeyRepeating = GL_FALSE;
+        return;
+    }
+
+    if( event->type == KeyPress )
+    {
+        keyboard_cb = (FGCBKeyboardUC)( FETCH_WCB( *window, Keyboard ));
+        special_cb  = (FGCBSpecialUC) ( FETCH_WCB( *window, Special  ));
+        keyboard_ud = FETCH_USER_DATA_WCB( *window, Keyboard );
+        special_ud  = FETCH_USER_DATA_WCB( *window, Special  );
+    }
+    else
+    {
+        keyboard_cb = (FGCBKeyboardUC)( FETCH_WCB( *window, KeyboardUp ));
+        special_cb  = (FGCBSpecialUC) ( FETCH_WCB( *window, SpecialUp  ));
+        keyboard_ud = FETCH_USER_DATA_WCB( *window, KeyboardUp );
+        special_ud  = FETCH_USER_DATA_WCB( *window, SpecialUp  );
+    }
+
+    /* Is there a keyboard/special callback hooked for this window? */
+    if( keyboard_cb || special_cb )
+    {
+        XComposeStatus composeStatus;
+        char asciiCode[ 32 ];
+        KeySym keySym;
+        int len;
+
+        /* Check for the ASCII/KeySym codes associated with the event: */
+        len = XLookupString( &event->xkey, asciiCode, sizeof(asciiCode),
+                             &keySym, &composeStatus
+        );
+
+        /* GLUT API tells us to have two separate callbacks... */
+        if( len > 0 )
+        {
+            /* ...one for the ASCII translateable keypresses... */
+            if( keyboard_cb )
+            {
+                fgSetWindow( window );
+                fgState.Modifiers = fgPlatformGetModifiers( event->xkey.state );
+                for (int i=0; i<len; i++) {
+                    keyboard_cb( asciiCode[ i ],
+                                 event->xkey.x, event->xkey.y,
+                                 keyboard_ud
+                    );
+                }
+                fgState.Modifiers = INVALID_MODIFIERS;
+            }
+        }
+        else
+        {
+            int special = -1;
+
+            /*
+             * ...and one for all the others, which need to be
+             * translated to GLUT_KEY_Xs...
+             */
+            switch( keySym )
+            {
+            case XK_F1:     special = GLUT_KEY_F1;     break;
+            case XK_F2:     special = GLUT_KEY_F2;     break;
+            case XK_F3:     special = GLUT_KEY_F3;     break;
+            case XK_F4:     special = GLUT_KEY_F4;     break;
+            case XK_F5:     special = GLUT_KEY_F5;     break;
+            case XK_F6:     special = GLUT_KEY_F6;     break;
+            case XK_F7:     special = GLUT_KEY_F7;     break;
+            case XK_F8:     special = GLUT_KEY_F8;     break;
+            case XK_F9:     special = GLUT_KEY_F9;     break;
+            case XK_F10:    special = GLUT_KEY_F10;    break;
+            case XK_F11:    special = GLUT_KEY_F11;    break;
+            case XK_F12:    special = GLUT_KEY_F12;    break;
+
+            case XK_KP_Left:
+            case XK_Left:   special = GLUT_KEY_LEFT;   break;
+            case XK_KP_Right:
+            case XK_Right:  special = GLUT_KEY_RIGHT;  break;
+            case XK_KP_Up:
+            case XK_Up:     special = GLUT_KEY_UP;     break;
+            case XK_KP_Down:
+            case XK_Down:   special = GLUT_KEY_DOWN;   break;
+
+            case XK_KP_Prior:
+            case XK_Prior:  special = GLUT_KEY_PAGE_UP; break;
+            case XK_KP_Next:
+            case XK_Next:   special = GLUT_KEY_PAGE_DOWN; break;
+            case XK_KP_Home:
+            case XK_Home:   special = GLUT_KEY_HOME;   break;
+            case XK_KP_End:
+            case XK_End:    special = GLUT_KEY_END;    break;
+            case XK_KP_Insert:
+            case XK_Insert: special = GLUT_KEY_INSERT; break;
+
+            case XK_Num_Lock :  special = GLUT_KEY_NUM_LOCK;  break;
+            case XK_KP_Begin :  special = GLUT_KEY_BEGIN;     break;
+            case XK_KP_Delete:  special = GLUT_KEY_DELETE;    break;
+
+            case XK_Shift_L:   special = GLUT_KEY_SHIFT_L;    break;
+            case XK_Shift_R:   special = GLUT_KEY_SHIFT_R;    break;
+            case XK_Control_L: special = GLUT_KEY_CTRL_L;     break;
+            case XK_Control_R: special = GLUT_KEY_CTRL_R;     break;
+            case XK_Alt_L:     special = GLUT_KEY_ALT_L;      break;
+            case XK_Alt_R:     special = GLUT_KEY_ALT_R;      break;
+            case XK_Meta_L:
+            case XK_Super_L:
+                special = GLUT_KEY_SUPER_L;
+                break;
+            case XK_Meta_R:
+            case XK_Super_R:
+                special = GLUT_KEY_SUPER_R;
+                break;
+            }
+
+            /*
+             * Execute the callback (if one has been specified),
+             * given that the special code seems to be valid...
+             */
+            if( special_cb && (special != -1) )
+            {
+                fgSetWindow( window );
+                fgState.Modifiers = fgPlatformGetModifiers( event->xkey.state );
+                special_cb( special, event->xkey.x, event->xkey.y, special_ud );
+                fgState.Modifiers = INVALID_MODIFIERS;
+            }
+        }
+    }
+}
 
 void fgPlatformProcessSingleEvent ( void )
 {
@@ -874,167 +1041,7 @@ void fgPlatformProcessSingleEvent ( void )
         case KeyRelease:
         case KeyPress:
         {
-            FGCBKeyboardUC keyboard_cb;
-            FGCBSpecialUC special_cb;
-            FGCBUserData keyboard_ud;
-            FGCBUserData special_ud;
-
-            GETWINDOW( xkey );
-            GETMOUSE( xkey );
-
-            /* Detect auto repeated keys, if configured globally or per-window */
-
-            if ( fgState.KeyRepeat==GLUT_KEY_REPEAT_OFF || window->State.IgnoreKeyRepeat==GL_TRUE )
-            {
-                if (event.type==KeyRelease)
-                {
-                    /*
-                     * Look at X11 keystate to detect repeat mode.
-                     * While X11 says the key is actually held down, we'll ignore KeyRelease/KeyPress pairs.
-                     */
-
-                    char keys[32];
-                    XQueryKeymap( fgDisplay.pDisplay.Display, keys ); /* Look at X11 keystate to detect repeat mode */
-
-                    if ( event.xkey.keycode<256 )            /* XQueryKeymap is limited to 256 keycodes    */
-                    {
-                        if ( keys[event.xkey.keycode>>3] & (1<<(event.xkey.keycode%8)) )
-                            window->State.pWState.KeyRepeating = GL_TRUE;
-                        else
-                            window->State.pWState.KeyRepeating = GL_FALSE;
-                    }
-                }
-            }
-            else
-                window->State.pWState.KeyRepeating = GL_FALSE;
-
-            /* Cease processing this event if it is auto repeated */
-
-            if (window->State.pWState.KeyRepeating)
-            {
-                if (event.type == KeyPress) window->State.pWState.KeyRepeating = GL_FALSE;
-                break;
-            }
-
-            if( event.type == KeyPress )
-            {
-                keyboard_cb = (FGCBKeyboardUC)( FETCH_WCB( *window, Keyboard ));
-                special_cb  = (FGCBSpecialUC) ( FETCH_WCB( *window, Special  ));
-                keyboard_ud = FETCH_USER_DATA_WCB( *window, Keyboard );
-                special_ud  = FETCH_USER_DATA_WCB( *window, Special  );
-            }
-            else
-            {
-                keyboard_cb = (FGCBKeyboardUC)( FETCH_WCB( *window, KeyboardUp ));
-                special_cb  = (FGCBSpecialUC) ( FETCH_WCB( *window, SpecialUp  ));
-                keyboard_ud = FETCH_USER_DATA_WCB( *window, KeyboardUp );
-                special_ud  = FETCH_USER_DATA_WCB( *window, SpecialUp  );
-            }
-
-            /* Is there a keyboard/special callback hooked for this window? */
-            if( keyboard_cb || special_cb )
-            {
-                XComposeStatus composeStatus;
-                char asciiCode[ 32 ];
-                KeySym keySym;
-                int len;
-
-                /* Check for the ASCII/KeySym codes associated with the event: */
-                len = XLookupString( &event.xkey, asciiCode, sizeof(asciiCode),
-                                     &keySym, &composeStatus
-                );
-
-                /* GLUT API tells us to have two separate callbacks... */
-                if( len > 0 )
-                {
-                    /* ...one for the ASCII translateable keypresses... */
-                    if( keyboard_cb )
-                    {
-                        fgSetWindow( window );
-                        fgState.Modifiers = fgPlatformGetModifiers( event.xkey.state );
-                        keyboard_cb( asciiCode[ 0 ],
-                                     event.xkey.x, event.xkey.y,
-                                     keyboard_ud
-                        );
-                        fgState.Modifiers = INVALID_MODIFIERS;
-                    }
-                }
-                else
-                {
-                    int special = -1;
-
-                    /*
-                     * ...and one for all the others, which need to be
-                     * translated to GLUT_KEY_Xs...
-                     */
-                    switch( keySym )
-                    {
-                    case XK_F1:     special = GLUT_KEY_F1;     break;
-                    case XK_F2:     special = GLUT_KEY_F2;     break;
-                    case XK_F3:     special = GLUT_KEY_F3;     break;
-                    case XK_F4:     special = GLUT_KEY_F4;     break;
-                    case XK_F5:     special = GLUT_KEY_F5;     break;
-                    case XK_F6:     special = GLUT_KEY_F6;     break;
-                    case XK_F7:     special = GLUT_KEY_F7;     break;
-                    case XK_F8:     special = GLUT_KEY_F8;     break;
-                    case XK_F9:     special = GLUT_KEY_F9;     break;
-                    case XK_F10:    special = GLUT_KEY_F10;    break;
-                    case XK_F11:    special = GLUT_KEY_F11;    break;
-                    case XK_F12:    special = GLUT_KEY_F12;    break;
-
-                    case XK_KP_Left:
-                    case XK_Left:   special = GLUT_KEY_LEFT;   break;
-                    case XK_KP_Right:
-                    case XK_Right:  special = GLUT_KEY_RIGHT;  break;
-                    case XK_KP_Up:
-                    case XK_Up:     special = GLUT_KEY_UP;     break;
-                    case XK_KP_Down:
-                    case XK_Down:   special = GLUT_KEY_DOWN;   break;
-
-                    case XK_KP_Prior:
-                    case XK_Prior:  special = GLUT_KEY_PAGE_UP; break;
-                    case XK_KP_Next:
-                    case XK_Next:   special = GLUT_KEY_PAGE_DOWN; break;
-                    case XK_KP_Home:
-                    case XK_Home:   special = GLUT_KEY_HOME;   break;
-                    case XK_KP_End:
-                    case XK_End:    special = GLUT_KEY_END;    break;
-                    case XK_KP_Insert:
-                    case XK_Insert: special = GLUT_KEY_INSERT; break;
-
-                    case XK_Num_Lock :  special = GLUT_KEY_NUM_LOCK;  break;
-                    case XK_KP_Begin :  special = GLUT_KEY_BEGIN;     break;
-                    case XK_KP_Delete:  special = GLUT_KEY_DELETE;    break;
-
-                    case XK_Shift_L:   special = GLUT_KEY_SHIFT_L;    break;
-                    case XK_Shift_R:   special = GLUT_KEY_SHIFT_R;    break;
-                    case XK_Control_L: special = GLUT_KEY_CTRL_L;     break;
-                    case XK_Control_R: special = GLUT_KEY_CTRL_R;     break;
-                    case XK_Alt_L:     special = GLUT_KEY_ALT_L;      break;
-                    case XK_Alt_R:     special = GLUT_KEY_ALT_R;      break;
-                    case XK_Meta_L:
-                    case XK_Super_L:
-                        special = GLUT_KEY_SUPER_L;
-                        break;
-                    case XK_Meta_R:
-                    case XK_Super_R:
-                        special = GLUT_KEY_SUPER_R;
-                        break;
-                    }
-
-                    /*
-                     * Execute the callback (if one has been specified),
-                     * given that the special code seems to be valid...
-                     */
-                    if( special_cb && (special != -1) )
-                    {
-                        fgSetWindow( window );
-                        fgState.Modifiers = fgPlatformGetModifiers( event.xkey.state );
-                        special_cb( special, event.xkey.x, event.xkey.y, special_ud );
-                        fgState.Modifiers = INVALID_MODIFIERS;
-                    }
-                }
-            }
+            fgHandleKeyboardEvents( &event );
         }
         break;
 
