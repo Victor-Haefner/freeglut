@@ -679,17 +679,35 @@ static LRESULT fghWindowProcKeyPress(SFG_Window *window, UINT uMsg, GLboolean ke
 
 #if !defined(_WIN32_WCE)
     default:
-        /* keydown displayable characters are handled with WM_CHAR message, but no corresponding up is generated. So get that here. */
-        if (!keydown)
-        {
-            BYTE state[ 256 ];
-            WORD code[ 2 ];
+        BYTE state[ 256 ];
+        WORD code[ 2 ];
+        code[0] = 0;
+        code[1] = 0;
 
-            GetKeyboardState( state );
+        GetKeyboardState( state );
+        
+        int ctrlPressed = GetKeyState(VK_CONTROL) < 0;
+        int altPressed = GetKeyState(VK_MENU) < 0;
+        UINT vkCode = (UINT)wParam;
+        UINT scanCode = (lParam >> 16) & 0xFF;
 
-            if( ToAscii( (UINT)wParam, 0, state, code, 0 ) == 1 )
-                wParam=code[ 0 ];
+        int r = -1;
+	if (ctrlPressed == 1 && altPressed == 0)
+	    r = ToAscii(vkCode, scanCode, 0, code, 0);
+	else
+	    r = ToAscii(vkCode, scanCode, state, code, 0);
+	    
+        if( r == 1 )
+            wParam=code[ 0 ];
 
+        if (keydown) {
+            fgState.Modifiers = fgPlatformGetModifiers();
+            INVOKE_WCB( *window, Keyboard,
+                   ( (char)(wParam & 0xFF), /* and with 0xFF to indicate to runtime that we want to strip out higher bits - otherwise we get a runtime error when "Smaller Type Checks" is enabled */
+                        window->State.MouseX, window->State.MouseY )
+            );
+            fgState.Modifiers = INVALID_MODIFIERS;
+        } else {
             INVOKE_WCB( *window, KeyboardUp,
                    ( (char)(wParam & 0xFF), /* and with 0xFF to indicate to runtime that we want to strip out higher bits - otherwise we get a runtime error when "Smaller Type Checks" is enabled */
                         window->State.MouseX, window->State.MouseY )
@@ -1352,6 +1370,8 @@ LRESULT CALLBACK fgPlatformWindowProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     }
     break ;
 
+    case WM_UNICHAR:
+    	if (wParam == UNICODE_NOCHAR) break;
     case WM_SYSKEYDOWN:
     case WM_KEYDOWN:
     {
@@ -1370,20 +1390,7 @@ LRESULT CALLBACK fgPlatformWindowProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
     case WM_SYSCHAR:
     case WM_CHAR:
-    {
-      window = fghWindowUnderCursor(window);
-
-      if( (fgState.KeyRepeat==GLUT_KEY_REPEAT_OFF || window->State.IgnoreKeyRepeat==GL_TRUE) && (HIWORD(lParam) & KF_REPEAT) )
-            break;
-
-        fgState.Modifiers = fgPlatformGetModifiers( );
-        INVOKE_WCB( *window, Keyboard,
-                    ( (char)wParam,
-                      window->State.MouseX, window->State.MouseY )
-        );
-        fgState.Modifiers = INVALID_MODIFIERS;
-    }
-    break;
+    break; /* handling in fghWindowProcKeyPress */
 
     case WM_CAPTURECHANGED:
         if (!lParam || !fgWindowByHandle((HWND)lParam))
